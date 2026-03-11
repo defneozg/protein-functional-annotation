@@ -8,17 +8,17 @@ import numpy as np
 from evaluate_pmind_clusters import all_domains
 
 # initial config
-#INFLATION_VALUES = [14, 20, 40, 60]
-#CLUSTER_FILES = {I: f"PMIND2026_cluster/diamond_thresh10_clusters_I{I}.txt" for I in INFLATION_VALUES}
+INFLATION_VALUES = [14, 20, 40, 60]
 #INFLATION_VALUES = ["baseline - NLE", "NLE with threshold (1e-10)", "bitscore"]
-INFLATION_VALUES = ["baseline", 5, 10, 20]
-CLUSTER_FILES = {"baseline":"PMIND2026_cluster/diamond_clusters_I20.txt",5:"PMIND2026_cluster/diamond_thresh5_clusters_I20.txt", 10:"PMIND2026_cluster/diamond_thresh10_clusters_I20.txt", 20:"PMIND2026_cluster/diamond_thresh20_clusters_I20.txt"}
+#INFLATION_VALUES = ["baseline", 5, 10, 20]
+CLUSTER_FILES = {I: f"PMIND2026_cluster/diamond_thresh20_clusters_I{I}.txt" for I in INFLATION_VALUES}
+#CLUSTER_FILES = {"baseline":"PMIND2026_cluster/diamond_clusters_I20.txt",5:"PMIND2026_cluster/diamond_thresh5_clusters_I20.txt", 10:"PMIND2026_cluster/diamond_thresh10_clusters_I20.txt", 20:"PMIND2026_cluster/diamond_thresh20_clusters_I20.txt"}
 #CLUSTER_FILES = {"baseline - NLE":"PMIND2026_cluster/diamond_clusters_I20.txt","NLE with threshold (1e-10)":"PMIND2026_cluster/diamond_thresh10_clusters_I20.txt", "bitscore":"PMIND2026_cluster/diamond_bitscore_clusters_I20.txt"}
 ANNOT_DIR = "PMIND2026_cluster/annotations/darkdino_annotation"
 OUT_DIR = "PMIND2026_cluster/figures"
-#COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
+COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
 #COLORS = {"baseline - NLE": "#2196F3", "NLE with threshold (1e-10)": "#4CAF50", "bitscore": "#FF9800"}
-COLORS = {"baseline": "#2196F3", 5: "#4CAF50", 10: "#FF9800", 20: "#E91E63"}
+#COLORS = {"baseline": "#2196F3", 5: "#4CAF50", 10: "#FF9800", 20: "#E91E63"}
 
 #load annotations
 print("Loading the annotations")
@@ -140,7 +140,7 @@ plt.rcParams.update({
 })
 
 fig, axes = plt.subplots(2, 3, figsize=(16, 10))
-fig.suptitle("MCL Clustering — darkdino — Threshold Comparison", fontsize=14, fontweight="bold", y=1.01) # changed from Inflation Parameter
+fig.suptitle("MCL Clustering — darkdino — Inflation Parameter", fontsize=14, fontweight="bold", y=1.01) # changed from Inflation Parameter
 labels = [f"I={I}" for I in valid_I]
 colors = [COLORS[I] for I in valid_I]
 
@@ -223,7 +223,7 @@ ax.set_ylabel("Number of clusters")
 ax.legend(fontsize=8)
 
 plt.tight_layout()
-outpath = f"{OUT_DIR}/mcl_inflation_comparison_darkdino_methods.png"
+outpath = f"{OUT_DIR}/mcl_inflation_comparison_darkdino_thresh20.png"
 plt.savefig(outpath, dpi=150, bbox_inches="tight")
 print(f"\nFigure saved -> {outpath}")
 plt.close()
