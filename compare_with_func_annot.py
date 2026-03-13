@@ -22,7 +22,7 @@ COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
 
 # exclude dbs for structural/biophysical predictors
 EXCLUDE_DBS = {
-    "MobiDBLite", "Phobius", "TMHMM", "Coils"
+    "MobiDBLite", "Phobius", "TMHMM", "Coils", "ProSitePatterns"
 }
 EXCLUDE_DOMAIN_IDS = {
     "mobidb-lite", "TMhelix", "TRANSMEMBRANE",
