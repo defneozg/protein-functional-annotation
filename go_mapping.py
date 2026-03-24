@@ -249,27 +249,38 @@ if os.path.exists(cache_path):
 missing = [(db, dom) for db, dom in bridge_ids if dom not in bridge_cache]
 print(f"  Not yet cached : {len(missing):,}")
 
-def query_interpro(accession):
-    url = (f"https://www.ebi.ac.uk/interpro/api/entry/interpro/?"
-           f"member_db_acc={urllib.parse.quote(accession)}&format=json")
+
+def query_interpro(db, accession):
+    db_slug = {
+        "CDD": "cdd", "Gene3D": "cathgene3d", "SUPERFAMILY": "ssf",
+        "SFLD": "sfld", "NCBIfam": "ncbifam", "TIGRFAM": "tigrfam"
+    }.get(db, db.lower())
+
+    url = f"https://www.ebi.ac.uk/interpro/api/entry/{db_slug}/{urllib.parse.quote(accession)}/?format=json"
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (research script; contact: defneozguven2001@gmail.com)"
-        })
+        req = urllib.request.Request(url, headers={"User-Agent": "research"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
-        go_terms = set()
-        for entry in data.get("results", []):
-            ipr_acc = entry["metadata"]["accession"]
-            go_terms.update(ipr2go.get(ipr_acc, set()))
-        return sorted(go_terms)
+        meta = data.get("metadata", {})
+
+        # try integrated IPR entry first
+        ipr_acc = meta.get("integrated")
+        if ipr_acc:
+            return sorted(ipr2go.get(ipr_acc, set()))
+
+        # try direct GO terms on the entry
+        go_terms = meta.get("go_terms")
+        if go_terms:
+            return [t["identifier"] for t in go_terms if "identifier" in t]
+
+        return []
     except Exception:
         return []
 
 if missing:
     print(f"  Querying InterPro API for {len(missing):,} IDs")
     for idx, (db, acc) in enumerate(missing):
-        bridge_cache[acc] = query_interpro(acc)
+        bridge_cache[acc] = query_interpro(db, acc)
         time.sleep(0.05)
         if (idx + 1) % 200 == 0:
             with open(cache_path, "w") as f:
@@ -295,6 +306,26 @@ print("\nSanity check:")
 for tid in test_ids:
     go = domain2go.get(tid, set())
     print(f"  {tid}: {len(go)} GO terms — {list(go)[:3]}")
+
+# after Step 3 completes
+with open("PMIND2026_cluster/go_mappings/bridge_cache.json") as f:
+    bridge_cache = json.load(f)
+
+from collections import defaultdict
+db_counts = defaultdict(lambda: {"total": 0, "mapped": 0})
+for acc, go_list in bridge_cache.items():
+    if acc.startswith("G3DSA"):   db = "Gene3D"
+    elif acc.startswith("SSF"):   db = "SUPERFAMILY"
+    elif acc.startswith("cd"):    db = "CDD"
+    elif acc.startswith("SFLD"):  db = "SFLD"
+    elif acc.startswith("TIGR") or acc.startswith("NF"): db = "NCBIfam"
+    else:                         db = "other"
+    db_counts[db]["total"] += 1
+    if go_list: db_counts[db]["mapped"] += 1
+
+for db, c in sorted(db_counts.items()):
+    pct = 100*c["mapped"]/c["total"] if c["total"] else 0
+    print(f"  {db:<15} {c['total']:>5,}  mapped {c['mapped']:>5,}  ({pct:.1f}%)")
 
 # 4) build annot_go
 print("\n" + "="*60)
@@ -487,7 +518,7 @@ for term, count in mf_freq.most_common(10):
 print("\n--- Rebuilding annot_go with functional DBs only ---")
 
 FUNCTIONAL_DBS = {"Pfam", "PRINTS", "SMART", "ProSiteProfiles",
-                  "ProSitePatterns", "PANTHER", "PIRSF", "Hamap"}
+                  "ProSitePatterns", "PANTHER", "PIRSF", "Hamap", "CDD", "NCBIfam", "SFLD"}
 
 annot_go_clean = defaultdict(set)
 db_stats_clean = defaultdict(lambda: {"rows": 0, "mapped": 0})
@@ -517,6 +548,8 @@ for db, s in sorted(db_stats_clean.items(), key=lambda x: -x[1]["rows"]):
 print(f"\nProteins with >= 1 MF GO term : {len(annot_go_clean):,}  ({100*len(annot_go_clean)/len(total_proteins):.1f}%)")
 mean_mf = sum(len(v) for v in annot_go_clean.values()) / max(len(annot_go_clean), 1)
 print(f"Mean MF GO terms per protein  : {mean_mf:.1f}")
+
+print(annot_go_clean.get("Durusdinium_trenchii_EP00913|sequence06893", set()))
 
 # check top terms now
 mf_freq_clean = Counter(t for go_set in annot_go_clean.values() for t in go_set)
