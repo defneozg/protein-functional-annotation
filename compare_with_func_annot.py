@@ -4,6 +4,7 @@ from collections import defaultdict, Counter
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
+import pickle
 
 from evaluate_pmind_clusters import all_domains
 
@@ -22,7 +23,7 @@ COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
 
 # exclude dbs for structural/biophysical predictors
 EXCLUDE_DBS = {
-    "MobiDBLite", "Phobius", "TMHMM", "Coils"
+    "MobiDBLite", "Phobius", "TMHMM", "Coils", "ProSitePatterns"
 }
 EXCLUDE_DOMAIN_IDS = {
     "mobidb-lite", "TMhelix", "TRANSMEMBRANE",
@@ -48,6 +49,11 @@ for f in glob.glob(f"{ANNOT_DIR}/*.tsv"):
         if db == "Pfam":
             pfam_annot[prot].add(dom_id)
 
+print("Loading GO annotations (annot_go_clean)")
+with open("PMIND2026_cluster/go_mappings/annot_go_clean.pkl", "rb") as f:
+    annot_go_clean = pickle.load(f)
+print(f"Proteins with GO-MF annotation : {len(annot_go_clean):,}")
+
 print(f"Proteins with functional annotation : {len(annot_func):,}")
 print(f"Proteins with Pfam annotation : {len(pfam_annot):,}")
 
@@ -63,6 +69,43 @@ def compute_homogeneity(members, annotation_dict):
     if not all_domains:
         return None
     top_count = Counter(all_domains).most_common(1)[0][1]
+    return top_count / len(annotated)
+
+def compute_homogeneity_jaccard(members, annotation_dict, min_annot_fraction=0.0):
+    """
+    Jaccard-based homogeneity: mean pairwise Jaccard similarity
+    between annotation sets of annotated members.
+    Optionally requires a minimum fraction of members to be annotated.
+    Returns None if fewer than 2 members are annotated or coverage too low.
+    """
+    annotated = [m for m in members if m in annotation_dict]
+    if len(annotated) < 2:
+        return None
+    if min_annot_fraction > 0 and len(annotated) / len(members) < min_annot_fraction:
+        return None
+    sets = [annotation_dict[m] for m in annotated]
+    scores = []
+    for i in range(len(sets)):
+        for j in range(i + 1, len(sets)):
+            u = sets[i] | sets[j]
+            if not u:
+                continue
+            scores.append(len(sets[i] & sets[j]) / len(u))
+    return np.mean(scores) if scores else None
+
+def compute_homogeneity_v2(members, annotation_dict, min_annot_fraction=0.3):
+    """Original metric but with coverage filter."""
+    annotated = [m for m in members if m in annotation_dict]
+    if len(annotated) < 2:
+        return None
+    if len(annotated) / len(members) < min_annot_fraction:
+        return None
+    all_doms = []
+    for a in annotated:
+        all_doms.extend(annotation_dict[a])
+    if not all_doms:
+        return None
+    top_count = Counter(all_doms).most_common(1)[0][1]
     return top_count / len(annotated)
 
 results = {}
@@ -83,6 +126,9 @@ for i in INFLATION_VALUES:
     sizes = [len(c) for c in clusters]
     homog_all = [] # homogeneity score using all databases
     homog_pfam = [] # homogeneity score using pfam
+    homog_go_v1 = []  # original metric on GO terms
+    homog_go_jaccard = []  # Jaccard on GO terms
+    homog_go_jaccard_filtered = []  # Jaccard with coverage filter
     annot_rates = [] # fraction of annotated members per cluster
     fully_dark = 0
     fully_annotated = 0
@@ -103,6 +149,13 @@ for i in INFLATION_VALUES:
         h_pfam = compute_homogeneity(c, pfam_annot)
         if h_all is not None: homog_all.append(h_all)
         if h_pfam is not None: homog_pfam.append(h_pfam)
+        h_go_v1 = compute_homogeneity(c, annot_go_clean)
+        h_go_jac = compute_homogeneity_jaccard(c, annot_go_clean)
+        h_go_jac_f = compute_homogeneity_jaccard(c, annot_go_clean, min_annot_fraction=0.3)
+
+        if h_go_v1 is not None: homog_go_v1.append(h_go_v1)
+        if h_go_jac is not None: homog_go_jaccard.append(h_go_jac)
+        if h_go_jac_f is not None: homog_go_jaccard_filtered.append(h_go_jac_f)
 
     bad_clusters = [(i, c) for i, c in enumerate(clusters)
                     if compute_homogeneity(c, annot_func) is not None
@@ -151,6 +204,19 @@ for i in INFLATION_VALUES:
         "n_evaluable_pfam" : len(homog_pfam),
         "pct_high_homog"   : sum(1 for h in homog_all if h >= 0.8) / len(homog_all) if homog_all else 0,
         "pct_low_homog"    : sum(1 for h in homog_all if h < 0.5)  / len(homog_all) if homog_all else 0,
+        "homog_go_v1": homog_go_v1,
+        "homog_go_jaccard": homog_go_jaccard,
+        "homog_go_jaccard_filtered": homog_go_jaccard_filtered,
+        "mean_homog_go_v1": np.mean(homog_go_v1) if homog_go_v1 else 0,
+        "mean_homog_go_jaccard": np.mean(homog_go_jaccard) if homog_go_jaccard else 0,
+        "mean_homog_go_jaccard_f": np.mean(homog_go_jaccard_filtered) if homog_go_jaccard_filtered else 0,
+        "n_eval_go_v1": len(homog_go_v1),
+        "n_eval_go_jaccard": len(homog_go_jaccard),
+        "n_eval_go_jaccard_f": len(homog_go_jaccard_filtered),
+        "pct_high_homog_go": sum(1 for h in homog_go_jaccard if h >= 0.8) / len(
+            homog_go_jaccard) if homog_go_jaccard else 0,
+        "pct_low_homog_go": sum(1 for h in homog_go_jaccard if h < 0.5) / len(
+            homog_go_jaccard) if homog_go_jaccard else 0,
     }
 
     print(f"Inflation {i}")
@@ -167,6 +233,9 @@ for i in INFLATION_VALUES:
     print(f"  Mean homogeneity (Pfam): {results[i]['mean_homog_pfam']:.3f}")
     print(f"  % clusters homog≥0.8  : {results[i]['pct_high_homog'] * 100:.1f}%")
     print(f"  % clusters homog<0.5  : {results[i]['pct_low_homog'] * 100:.1f}%")
+    print(f"  GO homogeneity (v1/original) : {results[i]['mean_homog_go_v1']:.3f}  ({len(homog_go_v1):,} evaluable)")
+    print(f"  GO homogeneity (Jaccard)     : {results[i]['mean_homog_go_jaccard']:.3f}  ({len(homog_go_jaccard):,} evaluable)")
+    print(f"  GO homogeneity (Jac+filter)  : {results[i]['mean_homog_go_jaccard_f']:.3f}  ({len(homog_go_jaccard_filtered):,} evaluable)")
 
 valid_I = [i for i in INFLATION_VALUES if i in results]
 
@@ -286,6 +355,10 @@ metrics = [
     ("Mean homog (Pfam)",    "mean_homog_pfam",     "{:.3f}"),
     ("% homog ≥ 0.8",        "pct_high_homog",      "{:.1%}"),
     ("% homog < 0.5",        "pct_low_homog",       "{:.1%}"),
+    ("Mean homog GO (v1)",        "mean_homog_go_v1",       "{:.3f}"),
+    ("Mean homog GO (Jaccard)",   "mean_homog_go_jaccard",   "{:.3f}"),
+    ("Mean homog GO (Jac+filt)",  "mean_homog_go_jaccard_f", "{:.3f}"),
+    ("N eval GO (Jaccard)",       "n_eval_go_jaccard",       "{:.0f}"),
 ]
 for label, key, fmt in metrics:
     row = f"{label:<35}"
@@ -687,3 +760,31 @@ print(f"  Partial domain overlap        : {partial_overlap:,} "
       f"({100*partial_overlap/total_outliers:.1f}%)  <- multi-domain proteins")
 print(f"  Has top domain + extras       : {multi_domain:,}  "
       f"({100*multi_domain/total_outliers:.1f}%)  <- annotation noise")
+
+# GO-based heterogeneous cluster analysis
+het_clusters_go = []
+for i, cluster in enumerate(clusters_inspect):
+    annotated = [m for m in cluster if m in annot_go_clean]
+    if len(annotated) < 2:
+        continue
+    h = compute_homogeneity_jaccard(cluster, annot_go_clean)
+    if h is not None and h < 1.0:
+        het_clusters_go.append((h, i, cluster, annotated))
+
+het_clusters_go.sort(key=lambda x: x[0])
+print(f"Heterogeneous clusters (GO Jaccard < 1.0): {len(het_clusters_go):,}")
+
+# most discriminating GO terms, appear in some proteins but not others
+go_conflict = Counter()
+for h, i, cluster, annotated in het_clusters_go[:500]:  # top 500 worst
+    all_go = [annot_go_clean[m] for m in annotated]
+    union = set().union(*all_go)
+    for term in union:
+        has = sum(1 for s in all_go if term in s)
+        hasnt = len(all_go) - has
+        if has > 0 and hasnt > 0:  # term present in some but not all
+            go_conflict[term] += 1
+
+print("\nTop 20 most conflicting GO terms:")
+for term, count in go_conflict.most_common(20):
+    print(f"  {term}  {count:>6,} clusters")
