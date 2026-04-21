@@ -11,10 +11,10 @@ ANNOT_DIR = "PMIND2026_cluster/annotations/darkdino_annotation"
 MAPPING_DIR = "PMIND2026_cluster/go_mappings"
 OUT_DIR = "PMIND2026_cluster/figures"
 COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
-INSPECT_I = 20
+INSPECT_I = 14
 
 print("Loading GO annotations (annot_go_clean)")
-with open(f"{MAPPING_DIR}/annot_go_mf.pkl", "rb") as f:
+with open(f"{MAPPING_DIR}/annot_go_mf_pruned.pkl", "rb") as f:
     annot_go: dict = pickle.load(f)
 print(f" Proteins with GO-MF annotation (only from the clean dbs) : {len(annot_go):,}")
 

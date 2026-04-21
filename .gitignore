@@ -4,3 +4,13 @@ alignments.zip
 annotations.zip
 ./.DS_Store
 __pycache__
+OrthoFinder_v3
+porthomcl_backup
+*.log
+.idea
+orthofinder_backup
+test.py
+check_isoforms.py
+reformat_orthofinder.py
+.venv
+logs
