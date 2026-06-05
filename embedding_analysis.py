@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics import roc_auc_score
+import sklearn as _sklearn
 
 # I/O helpers
 def load_h5(path: Path) -> tuple[list[str], np.ndarray]:
@@ -292,8 +293,10 @@ def run_validate(args):
                 else:
                     plot_pca = plot_embs
 
-                perplexity = max(2, min(20, len(plot_ids) // 4))
-                tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, max_iter=1000)
+                perplexity = max(2, min(30, len(plot_ids) // 4))
+                _sklearn_ver = tuple(int(x) for x in _sklearn.__version__.split('.')[:2])
+                _iter_kwarg = 'max_iter' if _sklearn_ver >= (1, 4) else 'n_iter'
+                tsne = TSNE(n_components=2, perplexity=perplexity, random_state=42, **{_iter_kwarg: 1000})
                 xy = tsne.fit_transform(plot_pca)
                 print(f"  t-SNE perplexity={perplexity}")
 
@@ -332,6 +335,7 @@ def run_validate(args):
                 print(f"\n  Intra-family cosine sim : mean = {intra.mean():.3f} std = {intra.std():.3f}")
                 print(f"  Inter-family cosine sim : mean = {inter.mean():.3f} std = {inter.std():.3f}")
                 separation = intra.mean() - inter.mean()
+                note = ('[GOOD]' if separation > 0.05 else '[LOW : expected within single species]')
                 print(f"  Separation (intra-inter) : {separation:.3f} - good if separation > 0.05")
 
                 # distribution plot
@@ -347,6 +351,119 @@ def run_validate(args):
                 plt.close(fig)
                 print(f"  -> intra_inter_family_sim.png saved")
 
+    # cross-species validation (requires --h5_dir)
+    if args.h5_dir:
+        print(f"\n[6] Cross-species validation")
+        h5_dir = Path(args.h5_dir)
+        other_h5 = [f for f in sorted(h5_dir.glob('*.h5')) if f.resolve() != h5_path.resolve()]
+        if not other_h5:
+            print(f" [SKIP] no other .h5 files found in {h5_dir}")
+        else:
+            rng_cs = np.random.default_rng(7)
+            chosen = list(rng_cs.choice(len(other_h5), size=min(3, len(other_h5)), replace=False))
+            chosen_paths = [other_h5[i] for i in chosen]
+            print(f"  Reference species : {h5_path.stem}")
+            print(f"  Cross species : {[p.stem for p in chosen_paths]}")
+
+            ref_norm = l2_normalize(embs)
+            for c in chosen_paths:
+                other_ids, other_embs = load_h5(c)
+                other_norm = l2_normalize(other_embs)
+                print(f"\n  vs {c.stem}  ({len(other_ids):,} proteins)")
+                n_ref = min(500, len(ids))
+                n_other = min(500, len(other_ids))
+                idx_ref = rng_cs.choice(len(ids), size=n_ref, replace=False)
+                idx_other = rng_cs.choice(len(other_ids), size=n_other, replace=False)
+                cross_sim = ref_norm[idx_ref] @ other_norm[idx_other].T # (n_ref, n_other)
+                cross_flat = cross_sim.flatten()
+                ref_sample = ref_norm[idx_ref]
+                within_sim = ref_sample @ ref_sample.T
+                within_flat = within_sim[np.triu_indices(n_ref, k=1)]
+                print(f"  Within species cosine : mean={within_flat.mean():.4f}  std={within_flat.std():.4f}")
+                print(f"  Cross-species cosine : mean={cross_sim.mean():.4f}  std={cross_sim.std():.4f}")
+                drop = within_flat.mean() - cross_sim.mean()
+                verdict = '[GOOD]' if drop > 0.02 else '[LOW : embeddings may not capture inter-species diversity]'
+                print(f"  Drop (within -> cross) : {drop:.4f}  {verdict}")
+
+                if args.go_tsv:
+                    protein2go_cs = load_go(Path(args.go_tsv))
+                    ref_go_ids = [pid for pid in ids if protein2go_cs.get(pid)]
+                    other_go_ids = [pid for pid in other_ids if protein2go_cs.get(pid)]
+                    print(f"    GO-annotated ref / other : {len(ref_go_ids)} / {len(other_go_ids)}")
+
+                    if not ref_go_ids or not other_go_ids:
+                        print("    [SKIP] no GO-annotated proteins in one or both species")
+                    else:
+                        ref_id2idx = {pid: i for i, pid in enumerate(ids)}
+                        other_id2idx = {pid: i for i, pid in enumerate(other_ids)}
+
+                        sel_ref = ref_go_ids[:min(200, len(ref_go_ids))]
+                        sel_other = other_go_ids[:min(200, len(other_go_ids))]
+
+                        rg_embs = ref_norm[np.array([ref_id2idx[p] for p in sel_ref])]
+                        og_embs = other_norm[np.array([other_id2idx[p] for p in sel_other])]
+                        go_cross_sim = rg_embs @ og_embs.T  # (n_sel_ref, n_sel_other)
+
+                        jaccard_scores = []
+                        for ri, rpid in enumerate(sel_ref):
+                            r_go = protein2go_cs[rpid]
+                            row = []
+                            for oi, opid in enumerate(sel_other):
+                                o_go = protein2go_cs[opid]
+                                inter = len(r_go & o_go)
+                                union = len(r_go | o_go)
+                                row.append(inter / union if union > 0 else 0.0)
+                            jaccard_scores.append(row)
+                        jaccard_mat = np.array(jaccard_scores)  # (n_sel_ref, n_sel_other)
+
+                        # report distribution of Jaccard scores
+                        jac_flat = jaccard_mat.flatten()
+                        print(f"    Jaccard score distribution (GO leaf terms):")
+                        print(f"      mean={jac_flat.mean():.4f}  median={np.median(jac_flat):.4f}  "
+                              f"max={jac_flat.max():.4f}")
+                        for thr in [0.0, 0.25, 0.5, 0.75, 1.0]:
+                            pct = 100 * (jac_flat > thr).mean()
+                            print(f"      Jaccard > {thr:.2f} : {pct:.1f}% of pairs")
+
+                        # evaluate at multiple Jaccard thresholds
+                        from scipy import stats as _stats
+                        print(f"")
+                        print(f"    Functional signal at Jaccard thresholds:")
+                        print(f"    {'Threshold':>10}  {'matched':>8}  {'unmatched':>10}  "
+                              f"{'Δcosine':>9}  {'p-value':>10}  verdict")
+
+                        for jac_thr in [0.0, 0.25, 0.5]:
+                            matched_mask = jaccard_mat > jac_thr
+                            unmatched_mask = jaccard_mat == 0.0  # strictly no shared terms
+
+                            m_sims = go_cross_sim[matched_mask].flatten()
+                            um_sims = go_cross_sim[unmatched_mask].flatten()
+
+                            if len(m_sims) < 5 or len(um_sims) < 5:
+                                print(f"    {'> ' + str(jac_thr):>10}  {'—':>8}  {'—':>10}  "
+                                      f"{'too few pairs':>21}")
+                                continue
+
+                            delta = m_sims.mean() - um_sims.mean()
+                            _, pv = _stats.ttest_ind(m_sims, um_sims, equal_var=False)
+                            ok = delta > 0 and pv < 0.05
+                            verd = '[GOOD]' if ok else ('[ns]' if pv >= 0.05 else '[WEAK]')
+                            print(f"    {'> ' + str(jac_thr):>10}  {len(m_sims):>8,}  {len(um_sims):>10,}  "
+                                  f"{delta:>+9.4f}  {pv:>10.4f}  {verd}")
+
+                fig, ax = plt.subplots(figsize=(7, 4))
+                ax.hist(within_flat, bins=60, alpha=0.6, color='#4C72B0', label=f'within ({h5_path.stem[:20]})')
+                ax.hist(cross_flat, bins=60, alpha=0.6, color='#DD8452', label=f'cross ({c.stem[:20]})')
+                ax.set_xlabel('Cosine similarity')
+                ax.set_ylabel('Count')
+                ax.set_title('Within vs cross-species cosine similarity')
+                ax.legend(fontsize=7)
+                fig.tight_layout()
+                fname = f'cross_species_{c.stem[:30]}.png'
+                fig.savefig(out_dir / fname, dpi=150)
+                plt.close(fig)
+                print(f"    -> {fname} saved")
+
     print(f"\n{SEP}")
     print(f"  Validation complete, figs in {out_dir}")
     print(SEP)
@@ -357,9 +474,8 @@ def run_cosine(args):
     h5_dir = Path(args.h5_dir)
     out_path = Path(args.out)
     chunk_size = args.chunk_size
-    limit = args.limit # None = all edges
-    SEP = "="*60
-
+    limit = args.limit  # None = all edges
+    SEP = "=" * 60
     print(SEP)
     print("  Cosine Similarity on Alignment Edges")
     print(SEP)
@@ -367,23 +483,26 @@ def run_cosine(args):
     print("\nLoading embeddings")
     id2row, emb_matrix = load_h5_dir(h5_dir)
     emb_norm = l2_normalize(emb_matrix)
-    del emb_matrix # we keep only normalized version
+    del emb_matrix  # keep only normalized version
 
     # stream alignment file, compute cosine, write output
     print(f"\nProcessing alignment edges")
-    print(f"  Input : {align_path}")
+    print(f"  Input  : {align_path}")
     print(f"  Output : {out_path}")
     if limit:
-        print(f"  Limit : {limit:,} edges")
+        print(f"  Limit  : {limit:,} edges")
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
     t0 = time.time()
     total_lines = 0
     total_written = 0
     total_missing = 0
 
-    # alignment form : 0:query_id 1:query_len 2:qstart 3:qend 4:subject_id 5:subject_len 6:sstart 7:send 8:aln_len 9:pident 10:query_cov 11:bitscore 12:evalue 13:raw_score
+    # 0:query_id 1:query_len 2:qstart 3:qend 4:subject_id 5:subject_len 6:sstart 7:send 8:aln_len 9:pident 10:query_cov 11:bitscore 12:evalue 13:raw_score
     COL_Q = 0
     COL_S = 4
+
     with open(align_path) as fin, open(out_path, "w") as fout:
         # write header
         fout.write("query_id\tquery_len\tqstart\tqend\t"
@@ -423,72 +542,92 @@ def run_cosine(args):
                 # progress
                 elapsed = time.time() - t0
                 rate = total_lines / elapsed
-                print(f"  {total_lines:>12,} edges processed  |  {rate/1000:.1f}k edges/s  |  missing={total_missing:,}  |  {elapsed:.0f}s elapsed", end="\r")
+                print(f"  {total_lines:>12,} edges processed  |  "
+                      f"{rate / 1000:.1f}k edges/s  |  "
+                      f"missing={total_missing:,}  |  "
+                      f"{elapsed:.0f}s elapsed", end="\r")
 
             if limit and total_lines >= limit:
                 break
 
-        #flush remainder
+        # flush remainder
         if chunk_q:
             flush_chunk()
 
     elapsed = time.time() - t0
-    coverage = 100 * (total_written - total_missing) / max(total_lines, 1)
+    coverage = 100 * (total_written - total_missing) / max(total_written, 1)
 
-    print("\n\n Done")
+    print(f"\n\n  Done.")
     print(f"  Edges processed : {total_written:,}")
-    print(f"  Missing (NA) : {total_missing:,} (proteins not yet embedded)")
-    print(f"  Coverage : {coverage:.1f}%")
-    print(f"  Elapsed : {elapsed:.1f}s")
-    print(f"  Output : {out_path}")
+    print(f"  Missing (NA)    : {total_missing:,}  "
+          f"(proteins not yet embedded)")
+    print(f"  Coverage        : {coverage:.1f}%")
+    print(f"  Elapsed         : {elapsed:.1f}s")
+    print(f"  Output          : {out_path}")
 
-    # quick stats on cosine values
-    print(f"\nComputing cosine similarity stats from output")
+    # quick stats on the cosine values
+    print(f"\nComputing cosine similarity statistics from output ...")
+    if not out_path.exists() or out_path.stat().st_size == 0:
+        print("  [SKIP] output file empty or missing, cannot compute stats")
+        return
+
+    print("  Reading all edges")
     sims_sample = []
-    with open(out_path, "w") as fh:
-        next(fh) # skip header
-        for i, line in enumerate(fh):
-            if i > 200_000:
-                break
-            parts = line.rstrip("\n").split("\t")
-            val = parts[-1]
+    with open(str(out_path), "r") as fh:
+        next(fh)  # skip header
+        for line in fh:
+            val = line.rstrip("\n").split("\t")[-1]
             if val != "NA":
                 sims_sample.append(float(val))
 
     sims_arr = np.array(sims_sample)
-    print(f"  Sample size : {len(sims_arr):,}")
-    print(f"  mean : {sims_arr.mean():.4f}")
-    print(f"  std : {sims_arr.std():.4f}")
-    print(f"  median : {np.median(sims_arr):.4f}")
-    print(f"  p5 / p95 : {np.percentile(sims_arr, 5):.4f} / {np.percentile(sims_arr, 95):.4f}")
+    print(f"  Total edges     : {len(sims_arr):,}")
+    print(f"  mean            : {sims_arr.mean():.4f}")
+    print(f"  std             : {sims_arr.std():.4f}")
+    print(f"  median          : {np.median(sims_arr):.4f}")
+    print(f"  p5 / p95        : {np.percentile(sims_arr, 5):.4f} / "
+          f"{np.percentile(sims_arr, 95):.4f}")
 
-    # correlation between bitscore and cosine sim
-    print(f"\nCorrelation: bitscore vs cosine similarity")
-    bitscores, cosines = [], []
-    with open(out_path) as fh:
+    # correlation between -log(evalue) and cosine sim
+    print(f"\nCorrelation: -log10(evalue) vs cosine similarity")
+    print("  Reading all edges for correlation")
+    neg_log_evalues, cosines = [], []
+    with open(str(out_path), "r") as fh:
         next(fh)
-        for i, line in enumerate(fh):
-            if i > 200_000:
-                break
+        for line in fh:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 15 or parts[-1] == "NA":
                 continue
             try:
-                bitscores.append(float(parts[11])) # bitscore is col 11
+                evalue = float(parts[12])
+                evalue = max(evalue, 1e-300)
+                neg_log_evalues.append(-np.log10(evalue))
                 cosines.append(float(parts[-1]))
             except ValueError:
                 continue
 
-    if len(bitscores) > 100:
-        corr = np.corrcoef(bitscores, cosines)[0, 1]
-        print(f"  Pearson r (bitscore, cosine): {corr:.4f}")
-        if abs(corr) < 0.3:
-            print("  [NOTE] low correlation, embeddings capture information beyond sequence similarity (good for reweighting)")
-        elif abs(corr) > 0.7:
-            print("  [NOTE] high correlation, embeddings are closely aligned with sequence similarity")
+    if len(neg_log_evalues) > 100:
+        from scipy.stats import spearmanr as _spearmanr
+        neg_log_arr = np.array(neg_log_evalues)
+        cos_arr = np.array(cosines)
+        r_pearson = np.corrcoef(neg_log_arr, cos_arr)[0, 1]
+        r_spearman, _ = _spearmanr(neg_log_arr, cos_arr)
+        print(f"  Sample size          : {len(neg_log_evalues):,}")
+        print(f"  -log10(evalue) range : {neg_log_arr.min():.1f} – {neg_log_arr.max():.1f}")
+        print(f"  Pearson r            : {r_pearson:.4f}")
+        print(f"  Spearman rho         : {r_spearman:.4f}  (rank-based, robust to outliers)")
+        if abs(r_pearson) < 0.3:
+            print("  [GOOD] Low correlation — embeddings capture signal complementary "
+                  "to sequence similarity. Edge reweighting is well motivated.")
+        elif abs(r_pearson) < 0.6:
+            print("  [OK] Moderate correlation: some overlap with sequence similarity "
+                  "but embeddings still add independent information.")
+        else:
+            print("  [NOTE] High correlation: embeddings closely track sequence "
+                  "similarity. Reweighting may have limited additional effect.")
 
     print(f"\n{SEP}")
-    print("  Cosine computation complete")
+    print("  Cosine computation complete.")
     print(SEP)
 
 # CLI
@@ -505,6 +644,7 @@ def build_parser():
     val.add_argument("--h5", required=True, help="Path to a single .h5 file")
     val.add_argument("--annot_dir", default=None, help="Path to annotation directory (for Pfam t-SNE check)")
     val.add_argument("--go_tsv", default=None, help="GO annotation file : .pkl or .tsv")
+    val.add_argument("--h5_dir", default=None, help="Directory with other .h5 files for cross-species validation")
     val.add_argument("--out_dir", default="PMIND2026_cluster/figures/embedding_validation", help="Path to output directory")
 
     # cosine
