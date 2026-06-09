@@ -125,12 +125,27 @@ def run_umap(embs: np.ndarray, n_components: int = 2, **kwargs) -> np.ndarray:
     reducer = umap.UMAP(n_components=n_components, **default_kwargs)
     return reducer.fit_transform(embs)
 
-# plotting
 CB_PALETTE = [
-    "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2",
-    "#D55E00", "#CC79A7", "#000000", "#999999", "#44AA99",
-    "#332288", "#88CCEE", "#DDCC77", "#117733", "#882255",
-    "#AA4499", "#661100", "#6699CC", "#AA4466", "#4477AA",
+    "#0072B2",  # blue
+    "#D55E00",  # vermillion
+    "#009E73",  # teal
+    "#CC79A7",  # pink-purple
+    "#E69F00",  # orange
+    "#000000",  # black
+    "#F0E442",  # yellow
+    "#7F3C8D",  # purple
+    "#11A579",  # green
+    "#3969AC",  # royal blue
+    "#E73F74",  # rose
+    "#80BA5A",  # lime
+    "#E68310",  # dark orange
+    "#008695",  # cyan
+    "#CF1C90",  # magenta
+    "#4B4B8F",  # indigo
+    "#F97B72",  # salmon
+    "#A5AA99",  # sage
+    "#B00C12",  # red
+    "#FC8D62",  # coral
 ]
 
 def plot_umap_go(xy: np.ndarray, ids: list[str], protein2go: dict[str, set], out_path: Path, n_top_terms: int = 10, point_size: float = 2.0, alpha_annotated: float = 0.8, alpha_unannotated: float = 0.08):
@@ -285,6 +300,75 @@ def run_viz(args):
     # plot 2: species
     print(f"\n  Plot 2: Species coloring")
     plot_umap_species(xy, species, out_path=out_dir / "umap_species.png")
+
+    # species cohesion analysis
+    print(f"\n Species cohesion analysis")
+    species_arr = np.array(species)
+    unique_sp = sorted(set(species))
+    emb_norm = embs / (np.linalg.norm(embs, axis=1, keepdims=True) + 1e-9)
+    rng2 = np.random.default_rng(1)
+    cohesion_results = []
+    for sp in unique_sp:
+        mask = species_arr == sp
+        n_sp = int(mask.sum())
+        if n_sp < 10:
+            continue
+        sp_idx = np.where(mask)[0]
+        other_idx = np.where(~mask)[0]
+        s_idx = rng2.choice(sp_idx, size=min(200, n_sp), replace=False)
+        o_idx = rng2.choice(other_idx, size=min(200, len(other_idx)), replace=False)
+        sp_embs = emb_norm[s_idx]
+        other_embs = emb_norm[o_idx]
+        # intra-species cosine
+        intra_sim = sp_embs @ sp_embs.T
+        k = len(sp_embs)
+        intra_mean = float(intra_sim[np.triu_indices(k, k=1)].mean())
+        # cross-species cosine
+        cross_mean = float((sp_embs @ other_embs.T).mean())
+        cohesion_results.append({
+            "species" : sp,
+            "n" : n_sp,
+            "intra" : intra_mean,
+            "cross" : cross_mean,
+            "cohesion" : intra_mean - cross_mean,
+        })
+    cohesion_results.sort(key=lambda x: x["cohesion"], reverse=True)
+    print(f"\n  {'Species':<45} {'n':>6}  {'intra':>7} {'cross':>7}  {'cohesion':>9}")
+    print(f"  {'-'*80}")
+    for r in cohesion_results:
+        flag = " <- tight blob" if r["cohesion"] > 0.05 else ""
+        print(f"  {r['species'][:43]:<45} {r['n']:>6}  {r['intra']:>7.4f}  {r['cross']:>7.4f}  {r['cohesion']:>+9.4f}{flag}")
+
+    # save tsv
+    cohesion_path = out_dir / "species_cohesion.tsv"
+    with open(cohesion_path, "w") as fh:
+        fh.write("species\tn\tintra_cosine\tcross_cosine\tcohesion\n")
+        for r in cohesion_results:
+            fh.write(f"{r['species']}\t{r['n']}\t"
+                     f"{r['intra']:.6f}\t{r['cross']:.6f}\t{r['cohesion']:.6f}\n")
+    print(f"  -> species_cohesion.tsv saved")
+
+    fig, ax = plt.subplots(figsize=(14, max(6, len(cohesion_results) * 0.28)))
+    names = [r["species"].replace("_", " ") for r in cohesion_results]
+    values = [r["cohesion"] for r in cohesion_results]
+    colors = ["#E74C3C" if v > 0.05 else "#4C72B0" for v in values]
+    ax.barh(names, values, color=colors, edgecolor="white", linewidth=0.5)
+    ax.axvline(0, color="black", linewidth=0.8)
+    ax.axvline(0.05, color="#E74C3C", linewidth=0.8, linestyle="--",
+               label="cohesion > 0.05 (tight blob)")
+    ax.set_xlabel("Cohesion (intra - cross cosine similarity)")
+    ax.set_title(
+        "Species embedding cohesion\n"
+        "Red = species forms tight cluster in embedding space (sequence-biased)\n"
+        "Blue = species dispersed (functionally organised)",
+        fontsize=9,
+    )
+    ax.legend(fontsize=8)
+    ax.invert_yaxis()
+    fig.tight_layout()
+    fig.savefig(out_dir / "species_cohesion.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  -> species_cohesion.png saved")
 
     print(f"\n{SEP}")
     print(f" Visualization done, figs in {out_dir}")
