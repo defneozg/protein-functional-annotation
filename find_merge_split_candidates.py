@@ -70,13 +70,24 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
     # group protein indices by (hdb_label, mcl_label)
     hdb2mcl_members = defaultdict(lambda: defaultdict(list))
     mcl_sizes_global = Counter(mcl_labels)
+    mcl_all_members = defaultdict(list)
     for idx, (hdb, mcl) in enumerate(zip(hdb_labels, mcl_labels)):
-        if hdb < 0:
+        if mcl < 0:
             continue
-        hdb2mcl_members[hdb][mcl].append(idx)
+        mcl_all_members[mcl].append(idx)
+        if hdb >= 0:
+            hdb2mcl_members[hdb][mcl].append(idx)
 
-    # precompute GO sets and centroids per (hdb, mcl) bucket
-    print(f"  Building {len(hdb2mcl_members)} HDBSCAN clusters for co-occuring MCL clusters")
+    # precompute GO sets from full MCL membership per cluster
+    print(f"  Precomputing GO sets from full MCL membership")
+    mcl_go_cache = {}
+    for mcl, all_idxs in mcl_all_members.items():
+        ann = [ids[i] for i in all_idxs if protein2go.get(ids[i])]
+        if len(ann) > max_annot_per_cluster:
+            ann = list(np.random.default_rng(mcl % 1000).choice(ann, max_annot_per_cluster, replace=False))
+        mcl_go_cache[mcl] = [protein2go[p] for p in ann]
+
+    print(f"  Scanning {len(hdb2mcl_members)} HDBSCAN clusters for co-occuring MCL clusters")
     candidates = []
     rng = np.random.default_rng(0)
 
@@ -85,20 +96,16 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
         if len(mcl_ids_here) < 2:
             continue
 
-        # cache GO sets and centroids per MCL cluster (within HDBSCAN cluster)
-        go_cache = {}
+        # cache centroids per MCL cluster (within HDBSCAN cluster)
         centroid_cache = {}
         for m in mcl_ids_here:
             idxs = mcl_dict[m]
-            ann = [ids[i] for i in idxs if protein2go.get(ids[i])]
-            if len(ann) > max_annot_per_cluster:
-                ann = list(rng.choice(ann, max_annot_per_cluster, replace=False))
-            go_cache[m] = [protein2go[p] for p in ann]
             if umap10d is not None:
                 centroid_cache[m] = umap10d[idxs].mean(axis=0)
         hdb_best = None
         for m1, m2 in combinations(mcl_ids_here, 2):
-            go1, go2 = go_cache[m1], go_cache[m2]
+            go1 = mcl_go_cache.get(m1, [])
+            go2 = mcl_go_cache.get(m2, [])
             # require a meaningful nb of annotations on both sides
             if len(go1) < min_annot_per_side or len(go2) < min_annot_per_side:
                 continue
@@ -106,7 +113,7 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
             if np.isnan(jacc):
                 continue
             dist = None
-            if umap10d is not None:
+            if umap10d is not None and m1 in centroid_cache and m2 in centroid_cache:
                 dist = float(np.linalg.norm(centroid_cache[m1] - centroid_cache[m2]))
 
             cand = {
@@ -115,10 +122,10 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
                 "mcl_cluster_2": int(m2),
                 "mcl1_size_total": mcl_sizes_global[m1],
                 "mcl2_size_total": mcl_sizes_global[m2],
-                "mcl1_size_here": len(mcl_dict[m1]),
-                "mcl2_size_here": len(mcl_dict[m2]),
-                "n_annot_1": len(go1),
-                "n_annot_2": len(go2),
+                "mcl1_size_here": len(mcl_dict[m1]), # hdbscan core only
+                "mcl2_size_here": len(mcl_dict[m2]), # hdbscan core only
+                "n_annot_1": len(go1), # full MCL
+                "n_annot_2": len(go2), # full MCL
                 "go_jaccard_cross": jacc,
                 "umap10d_dist": dist,
             }
@@ -134,7 +141,7 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
             candidates.append(hdb_best)
 
     candidates.sort(key=lambda c: c["go_jaccard_cross"], reverse=True)
-    return candidates[:top_n]
+    return candidates if top_n == 0 else candidates[:top_n]
 
 # SPLIT candidates
 def find_split_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: list[int], protein2go: dict[str, set], min_mcl_size: int = 50, min_sub_size: int = 5, max_annot_per_cluster: int = 100, top_n: int = 100):
@@ -143,6 +150,8 @@ def find_split_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
     print("\n  Grouping proteins by MCL cluster")
     mcl2idx = defaultdict(list)
     for idx, m in enumerate(mcl_labels):
+        if m < 0:
+            continue
         mcl2idx[m].append(idx)
 
     large_clusters = {m: idxs for m, idxs in mcl2idx.items() if len(idxs) >= min_mcl_size}
@@ -168,21 +177,27 @@ def find_split_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
         sub_groups = defaultdict(list)
         for i in idxs:
             h = hdb_labels[i]
-            if h >= 0:
-                sub_groups[h].append(i)
+            sub_groups[h if h >= 0 else -1].append(i)
 
         # need at least 2 substantial sub-groups
-        sub_groups = {h: g for h, g in sub_groups.items() if len(g) >= min_sub_size}
-        if len(sub_groups) < 2:
+        non_noise = {h: g for h, g in sub_groups.items() if h>=0 and len(g) >= min_sub_size}
+        if len(non_noise) < 2:
             continue
+
+        all_sub_groups = dict(non_noise)
+        if -1 in sub_groups and len(sub_groups[-1]) > 0:
+            all_sub_groups[-1] = sub_groups[-1] # noise residual
 
         # weighted sub-cluster homogeneity
         sub_homogs = []
         sub_weights = []
         sub_details = []
-        for h, g in sub_groups.items():
+        for h, g in all_sub_groups.items():
             ann_g = [i for i in g if protein2go.get(ids[i])]
             if len(ann_g) < 2:
+                sub_homogs.append(0.0)
+                sub_weights.append(len(g))
+                sub_details.append((int(h), len(g), len(ann_g), 0.0))
                 continue
             if len(ann_g) > max_annot_per_cluster:
                 ann_g = list(rng.choice(ann_g, max_annot_per_cluster, replace=False))
@@ -211,7 +226,7 @@ def find_split_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
         })
 
     candidates.sort(key=lambda c: c["improvement"], reverse=True)
-    return candidates[:top_n]
+    return candidates if top_n == 0 else candidates[:top_n]
 
 def main():
     p = argparse.ArgumentParser(
@@ -228,7 +243,7 @@ def main():
     p.add_argument("--max_per_hdb_cluster", type=int, default=1, help="Max merge candidates kept per HDBSCAN cluster (default: 1), set to 0 for unlimited (keeps all pairs)")
     p.add_argument("--min_mcl_size_split", type=int, default=50, help="Min size of MCL cluster to consider for splitting (default: 50)")
     p.add_argument("--min_sub_size", type=int, default=5, help="Min size of HDBSCAN sub-group for split candidates (default: 5)")
-    p.add_argument("--top_n", type=int, default=200, help="Number of top candidates to output per category (default: 200)")
+    p.add_argument("--top_n", type=int, default=5000, help="Number of top candidates to output per category (default: 200)")
     args = p.parse_args()
 
     umap_dir = Path(args.umap_dir)
