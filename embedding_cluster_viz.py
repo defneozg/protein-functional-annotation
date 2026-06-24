@@ -388,11 +388,19 @@ def run_cluster(args):
     print(f"  Embedding Clustering (HDBSCAN)")
     print(SEP)
 
+    def _find(out_dir, *candidates):
+        for name in candidates:
+            p = out_dir / name
+            if p.exists():
+                return p
+        return out_dir / candidates[0]
+
     # load UMAP coords if already computed
-    xy_path = out_dir / "umap_xy.npy"
-    ids_path = out_dir / "umap_ids.txt"
-    sp_path = out_dir / "umap_species.txt"
-    emb_path = out_dir / "umap_embs.npy"
+    xy_path = _find(out_dir, "umap_xy.npy", "umap_2d.npy")
+    ids_path = _find(out_dir, "umap_ids.txt", "all_ids.txt")
+    sp_path = _find(out_dir, "umap_species.txt", "all_species.txt")
+    emb_path = _find(out_dir, "umap_embs.npy")
+    hdb_labels_path = _find(out_dir, "hdbscan_labels.npy")
 
     if xy_path.exists() and ids_path.exists():
         print("\n  Loading UMAP coordinates")
@@ -400,7 +408,7 @@ def run_cluster(args):
         ids = open(ids_path).read().splitlines()
         species = open(sp_path).read().splitlines() if sp_path.exists() else ["?"] * len(ids)
         embs = np.load(emb_path) if emb_path.exists() else None
-        print(f"  Loaded {len(ids):,} proteins")
+        print(f"  Loaded {len(ids):,} proteins |  UMAP shape: {xy.shape}")
     else:
         print("\n  No saved UMAP found, loading embeddings and running UMAP")
         ids, species, embs = load_h5_dir_sampled(Path(args.h5_dir), args.n_sample, rng)
@@ -411,31 +419,36 @@ def run_cluster(args):
         with open(sp_path, "w") as f: f.write("\n".join(species))
 
     # HDBSCAN, running on higher dim 10D if embs available, fall back to 2D
-    if embs is not None and args.umap_dim_cluster > 2:
-        print(f"\n  Running UMAP to {args.umap_dim_cluster}D for clustering")
-        xy_hd = run_umap(embs, n_components = args.umap_dim_cluster, n_neighbors = 30, min_dist = 0.0)
-        cluster_input = xy_hd
-        print(f"  Using {args.umap_dim_cluster}D UMAP for HDBSCAN")
+    if hdb_labels_path.exists():
+        print(f"\n  Loading precomputed HDBSCAN labels from {hdb_labels_path}")
+        labels = np.load(hdb_labels_path)
+        print(f"  Loaded {len(labels):,} labels")
     else:
-        cluster_input = xy
-        print("  Using 2D UMAP for HDBSCAN")
+        if embs is not None and args.umap_dim_cluster > 2:
+            print(f"\n  Running UMAP to {args.umap_dim_cluster}D for clustering")
+            xy_hd = run_umap(embs, n_components = args.umap_dim_cluster, n_neighbors = 30, min_dist = 0.0)
+            cluster_input = xy_hd
+            print(f"  Using {args.umap_dim_cluster}D UMAP for HDBSCAN")
+        else:
+            cluster_input = xy
+            print("  Using 2D UMAP for HDBSCAN")
 
-    print(f"\n  Running HDBSCAN")
-    print(f"  min_cluster_size={args.min_cluster_size}  min_samples={args.min_samples}  metric=euclidean")
-    t0 = time.time()
-    clusterer = hdbscan.HDBSCAN(
-        min_cluster_size=args.min_cluster_size,
-        min_samples=args.min_samples,
-        metric="euclidean",
-        cluster_selection_method="eom", # excess of mass (fewer but larger clusters)
-        core_dist_n_jobs=-1,
-    )
-    labels = clusterer.fit_predict(cluster_input)
-    elapsed = time.time() - t0
+        print(f"\n  Running HDBSCAN")
+        print(f"  min_cluster_size={args.min_cluster_size}  min_samples={args.min_samples}  metric=euclidean")
+        t0 = time.time()
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=args.min_cluster_size,
+            min_samples=args.min_samples,
+            metric="euclidean",
+            cluster_selection_method="eom", # excess of mass (fewer but larger clusters)
+            core_dist_n_jobs=-1,
+        )
+        labels = clusterer.fit_predict(cluster_input)
+        elapsed = time.time() - t0
+        print(f"  Done in {elapsed:.1f}s")
 
     n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
     n_noise = (labels == -1).sum()
-    print(f"  Done in {elapsed:.1f}s")
     print(f"  Clusters found : {n_clusters:,}")
     print(f"  Noise points   : {n_noise:,} ({100 * n_noise / len(labels):.1f}%)")
     # cluster size distribution
@@ -528,14 +541,47 @@ def run_cluster(args):
                     homog_scores.append(np.mean(pair_jaccards))
 
                 return np.mean(homog_scores) if homog_scores else 0.0, len(homog_scores)
-
+            # raw comparison
             hdb_homog, hdb_n = go_homogeneity(labels, ids)
             mcl_homog, mcl_n = go_homogeneity([protein2mcl.get(pid, -1) for pid in ids], ids)
-
-            print(f"  HDBSCAN GO homogeneity : {hdb_homog:.4f}  (over {hdb_n} clusters)")
-            print(f"  MCL GO homogeneity : {mcl_homog:.4f}  (over {mcl_n} clusters)")
+            print("\n  Raw comparison (different protein sets and cluster sizes)")
+            print(f"  HDBSCAN GO homogeneity : {hdb_homog:.4f}  (over {hdb_n} clusters, {(np.array(list(labels)) >= 0).sum():,} proteins) ")
+            print(f"  MCL GO homogeneity : {mcl_homog:.4f}  (over {mcl_n} clusters, {len(protein2mcl):,} proteins)")
             diff = hdb_homog - mcl_homog
-            print(f"  ∆ (HDBSCAN - MCL) : {diff:.4f}  {'HDBSCAN better' if diff > 0 else 'MCL better'}")
+            print(f"  ∆ (HDBSCAN - MCL) : {diff:+.4f}  {'HDBSCAN better' if diff > 0 else 'MCL better'}")
+
+            # 2nd comparison: matched proteins only
+            matched_ids = [pid for pid, hdb_lbl in zip(ids, labels) if hdb_lbl >= 0 and protein2mcl.get(pid) is not None]
+            matched_hdb = [protein2mcl.get(pid, -1) * 0 + labels[list(ids).index(pid)] if False else labels[i] for i, (pid, hdb_lbl) in enumerate(zip(ids, labels)) if hdb_lbl >= 0 and protein2mcl.get(pid) is not None]
+            matched_mcl = [protein2mcl[pid] for pid in matched_ids]
+            hdb_homog_m, hdb_n_m = go_homogeneity(matched_hdb, matched_ids)
+            mcl_homog_m, mcl_n_m = go_homogeneity(matched_mcl, matched_ids)
+            print(f"\n  Fair comparison (same {len(matched_ids):,} proteins in both clusterings)")
+            print(f"  HDBSCAN GO homogeneity : {hdb_homog_m:.4f}  (over {hdb_n_m} clusters) ")
+            print(f"  MCL GO homogeneity : {mcl_homog_m:.4f}  (over {mcl_n_m} clusters)")
+            diff_m = hdb_homog_m - mcl_homog_m
+            print(f"  ∆ (HDBSCAN - MCL) : {diff:+.4f}  {'HDBSCAN better' if hdb_homog_m > mcl_homog_m else 'MCL better'}")
+
+            # comparison 3: matched proteins, size-stratified
+            print(f"\n  Size-stratified comparison (same proteins, binned by cluster size)")
+            print(f"{'Size range':>15}  {'HDB homog':>10}  {'MCL homog':>10}  {'Δ':>8}  {'n_clusters':>10}")
+            hdb_sizes = Counter(matched_hdb)
+            mcl_sizes = Counter(matched_mcl)
+            for lo, hi in [(2, 5), (6, 20), (21, 100), (101, 500), (501, 999999)]:
+                hdb_filtered_ids = [pid for pid, lbl in zip(matched_ids, matched_hdb) if lo <= hdb_sizes[lbl] <= hi]
+                mcl_filtered_ids = [pid for pid, lbl in zip(matched_ids, matched_mcl) if lo <= mcl_sizes[lbl] <= hi]
+                # we use intersection (proteins in both clusters that are in the size range)
+                hdb_set = set(hdb_filtered_ids)
+                mcl_set = set(mcl_filtered_ids)
+                both = list(hdb_set & mcl_set)
+                if len(both) < 10:
+                    continue
+                both_hdb = [matched_hdb[matched_ids.index(pid)] for pid in both]
+                both_mcl = [matched_mcl[matched_ids.index(pid)] for pid in both]
+                h_h, h_n = go_homogeneity(both_hdb, both)
+                m_h, m_n = go_homogeneity(both_mcl, both)
+                label = f"{lo}–{hi}" if hi < 999999 else f"{lo}+"
+                print(f"  {label:>15}  {h_h:>10.4f}  {m_h:>10.4f}  {h_h - m_h:>+8.4f}  {max(h_n, m_n):>10,}")
 
     print(f'\n{SEP}')
     print(f"  Clustering complete. Output : {out_dir}")
