@@ -63,7 +63,7 @@ def mean_jaccard_cross(go_sets_a: list[set], go_sets_b: list[set]) -> float:
     return float(np.mean(vals)) if vals else float("nan")
 
 # MERGE candidates
-def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: list[int], protein2go: dict[str, set], umap10d: np.ndarray = None, max_annot_per_cluster: int = 100, min_mcl_size: int = 3, min_annot_per_side: int = 5, max_per_hdb_cluster: int = 1, top_n: int = 200):
+def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: list[int], protein2go: dict[str, set], umap10d: np.ndarray = None, max_annot_per_cluster: int = 100, min_mcl_size: int = 3, min_annot_per_side: int = 5, max_per_hdb_cluster: int = 1, max_degree: int = 10, go_freq_max: float = 0.20, top_n: int = 200):
     """for each HDBSCAN cluster, find the MCL clusters whose members fall inside it.
     For every pair of MCL clusters co-occuring in the same HDBSCAN cluster, compute cross-cluster jaccard"""
     print("\n  Building HDBSCAN -> MCL co-occurence map")
@@ -87,9 +87,31 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
             ann = list(np.random.default_rng(mcl % 1000).choice(ann, max_annot_per_cluster, replace=False))
         mcl_go_cache[mcl] = [protein2go[p] for p in ann]
 
+    # filter-out overly generic GO terms before jaccard
+    total_annotated = sum(1 for m in mcl_all_members for i in mcl_all_members[m] if protein2go.get(ids[i]))
+    if total_annotated > 0 and go_freq_max < 1.0:
+        term_freq = Counter()
+        for pid in ids:
+            for t in protein2go.get(pid, set()):
+                term_freq[t] += 1
+        generic_terms = {t for t, n in term_freq.items()
+                         if n / len(protein2go) > go_freq_max}
+        print(f"  Filtering {len(generic_terms)} generic GO terms "
+              f"(present in >{go_freq_max * 100:.0f}% of annotated proteins) ...")
+        # rebuild go_cache without generic terms
+        mcl_go_cache_filtered = {}
+        for mcl, go_sets in mcl_go_cache.items():
+            filtered = [s - generic_terms for s in go_sets]
+            filtered = [s for s in filtered if s]  # drop empty sets
+            mcl_go_cache_filtered[mcl] = filtered
+        mcl_go_cache = mcl_go_cache_filtered
+    else:
+        generic_terms = set()
+
     print(f"  Scanning {len(hdb2mcl_members)} HDBSCAN clusters for co-occuring MCL clusters")
     candidates = []
     rng = np.random.default_rng(0)
+    cluster_degree = Counter() if max_degree > 0 else None
 
     for hdb, mcl_dict in hdb2mcl_members.items():
         mcl_ids_here = [m for m, members in mcl_dict.items() if mcl_sizes_global.get(m, 0) >= min_mcl_size]
@@ -130,15 +152,31 @@ def find_merge_candidates(ids: list[str], hdb_labels: np.ndarray, mcl_labels: li
                 "umap10d_dist": dist,
             }
 
+            if cluster_degree is not None and max_degree > 0:
+                if (cluster_degree[m1] >= max_degree or
+                        cluster_degree[m2] >= max_degree):
+                    continue
             if max_per_hdb_cluster != 0:
                 # keep only the single best pair per HDBSCAN cluster
                 if hdb_best is None or jacc > hdb_best["go_jaccard_cross"]:
                     hdb_best = cand
             else:
                 candidates.append(cand)
+                if cluster_degree is not None:
+                    cluster_degree[m1] += 1
+                    cluster_degree[m2] += 1
 
         if max_per_hdb_cluster != 0 and hdb_best is not None:
-            candidates.append(hdb_best)
+            if cluster_degree is not None and max_degree > 0:
+                m1 = hdb_best["mcl_cluster_1"]
+                m2 = hdb_best["mcl_cluster_2"]
+                if (cluster_degree[m1] < max_degree and
+                        cluster_degree[m2] < max_degree):
+                    candidates.append(hdb_best)
+                    cluster_degree[m1] += 1
+                    cluster_degree[m2] += 1
+            else:
+                candidates.append(hdb_best)
 
     candidates.sort(key=lambda c: c["go_jaccard_cross"], reverse=True)
     return candidates if top_n == 0 else candidates[:top_n]
@@ -241,6 +279,8 @@ def main():
     p.add_argument("--min_mcl_size_merge", type=int, default=3, help="Minimum MCL cluster size (default: 3)")
     p.add_argument("--min_annot_per_side", type=int, default=5, help="Min GO-annotated proteins required in EACH MCL cluster for a merge candidate (default: 5)")
     p.add_argument("--max_per_hdb_cluster", type=int, default=1, help="Max merge candidates kept per HDBSCAN cluster (default: 1), set to 0 for unlimited (keeps all pairs)")
+    p.add_argument("--max_degree", type=int, default=10, help="Max number of merge candidates any single MCL cluster can participate in (default: 10). Set to 0 to disable.")
+    p.add_argument("--go_freq_max", type=float, default=1.0, help="Exclude GO terms present in more than this fraction of annotated proteins from Jaccard computation (default: = disabled).")
     p.add_argument("--min_mcl_size_split", type=int, default=50, help="Min size of MCL cluster to consider for splitting (default: 50)")
     p.add_argument("--min_sub_size", type=int, default=5, help="Min size of HDBSCAN sub-group for split candidates (default: 5)")
     p.add_argument("--top_n", type=int, default=5000, help="Number of top candidates to output per category (default: 200)")
@@ -289,7 +329,7 @@ def main():
     print("  Finding MERGE candidates")
     print(SEP)
     t0 = time.time()
-    merge_cands = find_merge_candidates(ids, hdb_labels, mcl_labels, protein2go, umap10d=umap10d, min_mcl_size=args.min_mcl_size_merge, min_annot_per_side=args.min_annot_per_side, max_per_hdb_cluster=args.max_per_hdb_cluster, top_n=args.top_n,)
+    merge_cands = find_merge_candidates(ids, hdb_labels, mcl_labels, protein2go, umap10d=umap10d, min_mcl_size=args.min_mcl_size_merge, min_annot_per_side=args.min_annot_per_side, max_per_hdb_cluster=args.max_per_hdb_cluster, max_degree=args.max_degree, go_freq_max=args.go_freq_max, top_n=args.top_n,)
     print(f"  Found {len(merge_cands):,} candidates in {time.time() - t0:.1f}s")
 
     merge_path = out_dir / "merge_candidates.tsv"

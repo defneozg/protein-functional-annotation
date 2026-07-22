@@ -5,20 +5,38 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
-from evaluate_pmind_clusters import all_domains
-
 # initial config
-INFLATION_VALUES = [14, 20, 40, 60]
+#INFLATION_VALUES = [14, 20, 40, 60]
 #INFLATION_VALUES = ["baseline - NLE", "NLE with threshold (1e-10)", "bitscore"]
 #INFLATION_VALUES = ["baseline", 5, 10, 20]
-CLUSTER_FILES = {I: f"PMIND2026_cluster/diamond_thresh20_clusters_I{I}.txt" for I in INFLATION_VALUES}
+#CLUSTER_FILES = {I: f"PMIND2026_cluster/diamond_thresh20_clusters_I{I}.txt" for I in INFLATION_VALUES}
 #CLUSTER_FILES = {"baseline":"PMIND2026_cluster/diamond_clusters_I20.txt",5:"PMIND2026_cluster/diamond_thresh5_clusters_I20.txt", 10:"PMIND2026_cluster/diamond_thresh10_clusters_I20.txt", 20:"PMIND2026_cluster/diamond_thresh20_clusters_I20.txt"}
 #CLUSTER_FILES = {"baseline - NLE":"PMIND2026_cluster/diamond_clusters_I20.txt","NLE with threshold (1e-10)":"PMIND2026_cluster/diamond_thresh10_clusters_I20.txt", "bitscore":"PMIND2026_cluster/diamond_bitscore_clusters_I20.txt"}
 ANNOT_DIR = "PMIND2026_cluster/annotations/darkdino_annotation"
-OUT_DIR = "PMIND2026_cluster/figures"
-COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
+OUT_DIR = "PMIND2026_cluster/figures/reweight_comp_prott5"
+#COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
 #COLORS = {"baseline - NLE": "#2196F3", "NLE with threshold (1e-10)": "#4CAF50", "bitscore": "#FF9800"}
 #COLORS = {"baseline": "#2196F3", 5: "#4CAF50", 10: "#FF9800", 20: "#E91E63"}
+
+INFLATION_VALUES = ["baseline", "alpha0.10", "alpha0.20", "alpha0.30", "alpha0.40", "alpha0.50"]
+
+CLUSTER_FILES = {
+    "baseline"  : "PMIND2026_cluster/diamond_thresh20_clusters_I20.txt",
+    "alpha0.10" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.10_I20.txt",
+    "alpha0.20" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.20_I20.txt",
+    "alpha0.30" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.30_I20.txt",
+    "alpha0.40" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.40_I20.txt",
+    "alpha0.50" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.50_I20.txt",
+}
+
+COLORS = {
+    "baseline"  : "#4CAF50",
+    "alpha0.10" : "#E3F2FD",
+    "alpha0.20" : "#90CAF9",
+    "alpha0.30" : "#42A5F5",
+    "alpha0.40" : "#1565C0",
+    "alpha0.50" : "#0D47A1",
+}
 
 #load annotations
 print("Loading the annotations")
@@ -114,7 +132,7 @@ for i in INFLATION_VALUES:
     plt.xscale("log")
     plt.xlabel('Cluster size')
     plt.ylabel('Homogeneity')
-    plt.savefig(f"PMIND2026_cluster/figures/size_vs_homogeneity_thresh20_{i}.png", dpi=150)
+    plt.savefig(f"PMIND2026_cluster/figures/size_vs_homogeneity_reweight_{i}.png", dpi=150)
 
     results[i] = {
         "n_clusters"       : len(clusters),
@@ -166,7 +184,7 @@ plt.rcParams.update({
 })
 
 fig, axes = plt.subplots(2, 3, figsize=(16, 10))
-fig.suptitle("MCL Clustering — darkdino — Inflation Parameter", fontsize=14, fontweight="bold", y=1.01) # changed from Inflation Parameter
+fig.suptitle("MCL Clustering — darkdino — Static Edge reweighting [alpha = 0.1, 0.2, 0.3, 0.4, 0.5]", fontsize=14, fontweight="bold", y=1.01) # changed from Inflation Parameter
 labels = [f"I={I}" for I in valid_I]
 colors = [COLORS[I] for I in valid_I]
 
@@ -249,7 +267,7 @@ ax.set_ylabel("Number of clusters")
 ax.legend(fontsize=8)
 
 plt.tight_layout()
-outpath = f"{OUT_DIR}/mcl_inflation_comparison_darkdino_thresh20.png"
+outpath = f"{OUT_DIR}/mcl_inflation_comparison_darkdino_reweight.png"
 plt.savefig(outpath, dpi=150, bbox_inches="tight")
 print(f"\nFigure saved -> {outpath}")
 plt.close()
@@ -357,7 +375,7 @@ if fasta_lengths:
                 fontsize=8, color="#E53935",
                 bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="#E53935", alpha=0.8))
     plt.tight_layout()
-    outpath = f"{OUT_DIR}/singleton_length_distribution.png"
+    outpath = f"{OUT_DIR}/singleton_length_distribution_reweight.png"
     plt.savefig(outpath, dpi=150, bbox_inches="tight")
     print(f"\nFigure saved -> {outpath}")
     plt.close()
@@ -387,7 +405,7 @@ if fasta_lengths:
                  fontweight="bold")
     ax.legend()
     plt.tight_layout()
-    outpath2 = f"{OUT_DIR}/singleton_rate_by_length.png"
+    outpath2 = f"{OUT_DIR}/singleton_rate_by_length_reweight.png"
     plt.savefig(outpath2, dpi=150, bbox_inches="tight")
     print(f"Figure saved -> {outpath2}")
     plt.close()

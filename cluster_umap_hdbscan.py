@@ -78,7 +78,8 @@ def run_umap(embs: np.ndarray, n_components: int, n_neighbors: int, min_dist: fl
         min_dist=min_dist,
         metric="cosine",
         random_state=random_state,
-        low_memory=False,
+        low_memory=True,
+        init="random",      # skips spectral initialization which requires allocating 151GB+ eigenvector matrix when the graph has many disconnected components (OOM fix)
         n_jobs=n_jobs,
         verbose=True,
     )

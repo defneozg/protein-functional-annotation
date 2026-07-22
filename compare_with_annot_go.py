@@ -5,13 +5,47 @@ from collections import defaultdict, Counter
 import matplotlib.pyplot as plt
 import numpy as np
 
-INFLATION_VALUES = [14, 20, 40, 60]
-CLUSTER_FILES = {I: f"PMIND2026_cluster/diamond_thresh20_clusters_I{I}.txt" for I in INFLATION_VALUES}
+#INFLATION_VALUES = [14, 20, 40, 60]
+#CLUSTER_FILES = {I: f"PMIND2026_cluster/diamond_thresh20_clusters_I{I}.txt" for I in INFLATION_VALUES}
 ANNOT_DIR = "PMIND2026_cluster/annotations/darkdino_annotation"
 MAPPING_DIR = "PMIND2026_cluster/go_mappings"
-OUT_DIR = "PMIND2026_cluster/figures"
-COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
-INSPECT_I = 14
+OUT_DIR = "PMIND2026_cluster/figures/reweight_comp_dynamic_prott5"
+#COLORS = {14: "#2196F3", 20: "#4CAF50", 40: "#FF9800", 60: "#E91E63"}
+INFLATION_VALUES = ["baseline", "alpha0.10", "alpha0.20", "alpha0.30", "alpha0.40", "alpha0.50"]
+
+CLUSTER_FILES = {
+    "baseline"  : "PMIND2026_cluster/diamond_clusters_I20.txt",
+    "alpha0.10" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.10_I20.txt",
+    "alpha0.20" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.20_I20.txt",
+    "alpha0.30" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.30_I20.txt",
+    "alpha0.40" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.40_I20.txt",
+    "alpha0.50" : "/Volumes/Ultra Touch/reweighted_prott5/clusters_reweighted_alpha0.50_I20.txt",
+}
+
+COLORS = {
+    "baseline"  : "#4CAF50",
+    "alpha0.10" : "#E3F2FD",
+    "alpha0.20" : "#90CAF9",
+    "alpha0.30" : "#42A5F5",
+    "alpha0.40" : "#1565C0",
+    "alpha0.50" : "#0D47A1",
+}
+#INSPECT_I = "alpha0.50"
+"""
+INFLATION_VALUES = ["baseline", "tau=0.030", "tau=0.050", "tau=0.100"]
+CLUSTER_FILES = {
+    "baseline"  : "PMIND2026_cluster/diamond_thresh20_clusters_I20.txt",
+    "tau=0.030" : "PMIND2026_cluster/reweighted_dynamic_prott5/clusters_reweighted_dynamic_amax0.50_tau0.030_I20.txt",
+    "tau=0.050" : "PMIND2026_cluster/reweighted_dynamic_prott5/clusters_reweighted_dynamic_amax0.50_tau0.050_I20.txt",
+    "tau=0.100" : "PMIND2026_cluster/reweighted_dynamic_prott5/clusters_reweighted_dynamic_amax0.50_tau0.100_I20.txt",
+}
+
+COLORS = {
+    "baseline"  : "#4CAF50",
+    "tau=0.030" : "#E3F2FD",
+    "tau=0.050" : "#90CAF9",
+    "tau=0.100" : "#42A5F5",
+}"""
 
 print("Loading GO annotations (annot_go_clean)")
 with open(f"{MAPPING_DIR}/annot_go_mf_pruned.pkl", "rb") as f:
@@ -166,7 +200,7 @@ labels = [f"I={i}" for i in valid_I]
 colors = [COLORS[i] for i in valid_I]
 
 fig, axes = plt.subplots(2, 3, figsize=(16, 10))
-fig.suptitle("MCL Clustering — GO-MF Annotation — Inflation Comparison", fontsize=14, fontweight="bold", y=1.01)
+fig.suptitle("MCL Clustering — GO-MF Annotation — Static Reweighting Comparison", fontsize=14, fontweight="bold", y=1.01) # changed from Inflation Comparison
 
 # number of clusters
 ax = axes[0, 0]

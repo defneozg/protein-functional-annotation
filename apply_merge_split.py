@@ -135,6 +135,12 @@ def main():
                         "clique: only merge a group if EVERY pair within it meets "
                         "--min_jaccard, re-checking pairs not in the candidate file "
                         "directly against the GO annotations. More conservative.")
+    p.add_argument("--max_merged_size", type=int, default=10000,
+                   help="Maximum allowed size for a merged cluster (default: 10000). "
+                        "Union-find groups that would exceed this size are rejected "
+                        "entirely, preventing runaway transitive merges through "
+                        "large functional hubs like ATP-binding families. "
+                        "Set to 0 to disable.")
     p.add_argument("--go_pkl", default=None, help="Required for --merge_mode clique (to re-check pairwise Jaccard for pairs not in merge_candidates.tsv)")
     p.add_argument("--apply", choices=["both", "splits_only", "merges_only"], default="both", help="Which operations to apply (default: both). Use splits_only or merges_only to isolate each effect for evaluation.")
     args = p.parse_args()
@@ -189,8 +195,9 @@ def main():
     umap_dir = Path(args.umap_dir)
     ids_path = _find(umap_dir, "umap_ids.txt", "all_ids.txt")
     hdb_path = _find(umap_dir, "hdbscan_labels.npy")
-    all_ids = np.load(hdb_path)
-    id2hdb = dict(zip(all_ids, all_ids))
+    all_ids = ids_path.read_text().splitlines()
+    hdb_labels = np.load(hdb_path)
+    id2hdb = dict(zip(all_ids, hdb_labels))
 
     # apply splits
     new_clusters: dict = {}
@@ -333,6 +340,26 @@ def main():
 
     # collapse union-find groups into final clusters
     print(f"\n  Collapsing merged groups")
+    if apply_merges and args.max_merged_size > 0:
+        group_sizes = defaultdict(int)
+        for key, members in new_clusters.items():
+            root = uf.find(key) if key in uf.parent else key
+            group_sizes[root] += len(members)
+
+        oversized = {root for root, sz in group_sizes.items() if sz > args.max_merged_size}
+        if oversized:
+            print(f"  Rejecting {len(oversized):,} oversized merged groups (would exceed {args.max_merged_size} proteins)")
+            for root in oversized:
+                changelog.append((root, "merge_rejected_size", f"merged group size {group_sizes[root]:,} > max_merged_size {args.max_merged_size:,}"))
+            uf_clean = UnionFind()
+            for key in new_clusters:
+                root = uf.find(key) if key in uf.parent else key
+                if root not in oversized:
+                    uf_clean.union(key, root)
+            uf = uf_clean
+        else:
+            oversized = set()
+
     final_groups = defaultdict(list)
     for key, members in new_clusters.items():
         root = uf.find(key) if key in uf.parent else key
@@ -363,6 +390,7 @@ def main():
     sizes_after = [len(m) for m in final_groups.values()]
     print(f"  Apply mode      : {args.apply}")
     print(f"  Merge mode      : {args.merge_mode}")
+    print(f"  Max merged size : {args.max_merged_size if args.max_merged_size > 0 else 'unlimited'}")
     print(f"  Clusters before : {len(clusters):,}  "
           f"(median size {np.median(sizes_before):.0f}, max {max(sizes_before)})")
     print(f"  Clusters after  : {len(final_groups):,}  "
