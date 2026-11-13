@@ -10,21 +10,20 @@ import matplotlib.gridspec as gridspec
 PATHS = {
     "OrthoFinder": "orthofinder_backup/Orthogroups/Orthogroups.txt",
     "PorthoMCL":   "porthomcl_backup/8.all.ort.group",
-    "MCL":         "PMIND2026_cluster/diamond_thresh20_clusters_I20.txt",
+    "MCL":         "PMIND2026_cluster/diamond_clusters_I20.txt",
 }
 TAXON_MAPPING = "porthomcl_backup/taxon_code_mapping.txt"
 MAPPING_DIR   = "PMIND2026_cluster/go_mappings"
-OUT_DIR       = "PMIND2026_cluster/figures"
+OUT_DIR       = "PMIND2026_cluster/figures/report_figs"
 MIN_SIZE      = 2
 
 os.makedirs(OUT_DIR, exist_ok=True)
 
 METHOD_COLORS = {
-    "OrthoFinder": "#9C27B0",
-    "PorthoMCL":   "#2196F3",
-    "MCL":         "#4CAF50",
+    "OrthoFinder": "#FEC89A",
+    "PorthoMCL":   "#FCD5CE",
+    "MCL":         "#F49595",
 }
-
 # taxon mapping
 print("Loading taxon code mapping")
 code_to_species = {}
@@ -43,7 +42,7 @@ def decode_porthomcl_id(coded_id):
     return f"{code_to_species.get(code, code)}|{seqnum}"
 
 # GO annotations
-print("Loading GO annotations...")
+print("Loading GO annotations")
 with open(f"{MAPPING_DIR}/annot_go_mf_pruned.pkl", "rb") as f:
     annot_go: dict = pickle.load(f)
 print(f"  Proteins with GO-MF annotation: {len(annot_go):,}")
@@ -128,7 +127,7 @@ for method, path in PATHS.items():
 
     print(f"\nLoading {method}...")
     clusters = loaders[method](path, min_size=MIN_SIZE)
-    print(f"  {len(clusters):,} clusters — computing homogeneity (this may take a few minutes)...")
+    print(f"  {len(clusters):,} clusters, computing homogeneity")
 
     dark_sizes        = []
     annotated_sizes   = []

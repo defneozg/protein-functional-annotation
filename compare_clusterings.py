@@ -24,11 +24,11 @@ import random
 PATHS = {
     "orthofinder": "orthofinder_backup/Orthogroups/Orthogroups.txt",
     "porthomcl": "porthomcl_backup/8.all.ort.group",
-    "mcl": "PMIND2026_cluster/diamond_thresh20_clusters_I20.txt"
+    "mcl": "PMIND2026_cluster/diamond_clusters_I20.txt"
 }
 
 TAXON_MAPPING = "porthomcl_backup/taxon_code_mapping.txt"
-OUT_DIR = "PMIND2026_cluster/figures"
+OUT_DIR = "PMIND2026_cluster/figures/report_figs/clustering_comp"
 MIN_SIZE = 2 # for now we only ignore singletons
 MAX_ARI_PROTEINS = 6_000_000 # subsample for ARI if the dataset is too large
 TOP_N_SPLITMERGE = 500_000 # we only analyse top N largest clusters for split/merge
@@ -150,7 +150,7 @@ for a, b in combinations(method_names, 2):
 # coverage bar chart
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 fig.suptitle("Clustering Coverage Comparison", fontsize=13, fontweight="bold")
-colors = {"orthofinder": "#9C27B0", "porthomcl": "#2196F3", "mcl": "#4CAF50"}
+colors = {"orthofinder": "#FEC89A", "porthomcl": "#FCD5CE", "mcl": "#F49595"}
 color_list = [colors.get(n, "#607D8B") for n in method_names]
 
 # proteins assigned

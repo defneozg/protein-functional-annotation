@@ -68,7 +68,7 @@ def discover_cluster_files(static_dir, dynamic_dir) -> dict[str, Path]:
             try:
                 amax = stem.split("amax")[1].split("_")[0]
                 tau  = stem.split("tau")[1].split("_")[0]
-                files[f"dyn_amax={amax}_τ={tau}"] = fp
+                files[f"dyn_α_max={amax}_τ={tau}"] = fp
             except IndexError:
                 files[fp.stem] = fp
     return files
@@ -145,7 +145,7 @@ def best_match_jaccard(clusters_a: dict, clusters_b: dict,
 
     return jaccards
 
-def go_homogeneity_comparison(clusters: dict, protein2go: dict, n_sample: int = 5000) -> dict:
+def go_homogeneity_comparison(clusters: dict, protein2go: dict, n_sample: int = 500_000) -> dict:
     rng = random.Random(2)
     items = list(clusters.values())
     if len(items) > n_sample:
